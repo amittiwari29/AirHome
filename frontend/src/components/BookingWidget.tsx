@@ -1,0 +1,179 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import DateRangeCalendar from "./DateRangeCalendar";
+import GuestSelector from "./GuestSelector";
+import PriceBreakdown from "./PriceBreakdown";
+import { formatShort, nightsBetween, toISODate } from "@/lib/date";
+import { useToast } from "@/lib/toast-context";
+import { useLocale } from "@/lib/locale-context";
+import { listingsApi } from "@/lib/api";
+import type { ListingDetail, StayQuote } from "@/lib/types";
+
+export default function BookingWidget({ listing }: { listing: ListingDetail }) {
+  const router = useRouter();
+  const { showToast } = useToast();
+  const { formatPrice, t } = useLocale();
+  const [checkIn, setCheckIn] = useState<Date | null>(null);
+  const [checkOut, setCheckOut] = useState<Date | null>(null);
+  const [guests, setGuests] = useState(1);
+  const [datesOpen, setDatesOpen] = useState(false);
+  const [guestsOpen, setGuestsOpen] = useState(false);
+
+  const [quote, setQuote] = useState<StayQuote | null>(null);
+  const [quoting, setQuoting] = useState(false);
+
+  const nights = checkIn && checkOut ? nightsBetween(checkIn, checkOut) : 0;
+
+  // The stay is priced by the server, because the widget can't know about the
+  // weekend rate, the nights the host re-priced on their calendar or the
+  // length-of-stay discounts. Quoting here means the number on the button is
+  // the number that gets charged.
+  useEffect(() => {
+    if (!checkIn || !checkOut || nights <= 0) {
+      setQuote(null);
+      return;
+    }
+    let cancelled = false;
+    setQuoting(true);
+    listingsApi
+      .quote(listing.id, toISODate(checkIn), toISODate(checkOut))
+      .then((q) => {
+        if (!cancelled) setQuote(q);
+      })
+      .catch(() => {
+        if (!cancelled) setQuote(null);
+      })
+      .finally(() => {
+        if (!cancelled) setQuoting(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listing.id, checkIn, checkOut, nights]);
+
+  const canReserve = !!checkIn && !!checkOut && nights > 0 && (quote?.available ?? false);
+
+  function handleReserve() {
+    if (!canReserve || !checkIn || !checkOut) {
+      setDatesOpen(true);
+      showToast("Please select your check-in and check-out dates", "info");
+      return;
+    }
+    if (guests > listing.max_guests) {
+      showToast(`This place has a maximum of ${listing.max_guests} guests`, "error");
+      return;
+    }
+    const params = new URLSearchParams({
+      check_in: toISODate(checkIn),
+      check_out: toISODate(checkOut),
+      guests: String(guests),
+    });
+    router.push(`/booking/${listing.id}?${params.toString()}`);
+  }
+
+  return (
+    <div id="reserve" className="sticky top-28 rounded-2xl border border-neutral-200 p-6 shadow-card dark:border-neutral-800">
+      {/* Real Airbnb leads with the stay total, underlined, once dates are set;
+          before that, the nightly rate and a nudge to add dates. */}
+      <div className="mb-5">
+        {nights > 0 && quote ? (
+          <p className="text-[22px]">
+            <span className="font-semibold underline">{formatPrice(quote.total)}</span>{" "}
+            <span className="text-base text-hof dark:text-neutral-400">{t("total")}</span>
+          </p>
+        ) : nights > 0 && quoting ? (
+          <p className="text-[22px] text-hof dark:text-neutral-400">{t("Checking prices…")}</p>
+        ) : (
+          <>
+            <p className="text-[22px]">
+              <span className="font-semibold">{formatPrice(listing.price_per_night)}</span>{" "}
+              <span className="text-base text-hof dark:text-neutral-400">{t("night")}</span>
+            </p>
+            <p className="text-sm text-hof dark:text-neutral-400">{t("Add dates for prices")}</p>
+          </>
+        )}
+      </div>
+
+      <div className="relative rounded-xl border border-neutral-400 dark:border-neutral-600">
+        <div className="grid grid-cols-2 divide-x divide-neutral-400 border-b border-neutral-400 dark:divide-neutral-600 dark:border-neutral-600">
+          <button
+            type="button"
+            onClick={() => {
+              setDatesOpen((o) => !o);
+              setGuestsOpen(false);
+            }}
+            className="px-3 py-2.5 text-left"
+          >
+            <span className="block text-[10px] font-bold uppercase tracking-wide">{t("Check-in")}</span>
+            <span className="text-sm">{checkIn ? formatShort(checkIn) : t("Add date")}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDatesOpen((o) => !o);
+              setGuestsOpen(false);
+            }}
+            className="px-3 py-2.5 text-left"
+          >
+            <span className="block text-[10px] font-bold uppercase tracking-wide">{t("Checkout")}</span>
+            <span className="text-sm">{checkOut ? formatShort(checkOut) : t("Add date")}</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setGuestsOpen((o) => !o);
+            setDatesOpen(false);
+          }}
+          className="block w-full px-3 py-2.5 text-left"
+        >
+          <span className="block text-[10px] font-bold uppercase tracking-wide">{t("Guests")}</span>
+          <span className="text-sm">
+            {guests} {guests > 1 ? t("guests") : t("guest")}
+          </span>
+        </button>
+
+        {datesOpen && (
+          <div className="absolute left-0 top-full z-20 mt-2 w-[320px] rounded-2xl border border-neutral-200 bg-white p-4 shadow-popover dark:border-neutral-700 dark:bg-neutral-900 sm:w-[360px]">
+            <DateRangeCalendar
+              checkIn={checkIn}
+              checkOut={checkOut}
+              blockedDates={listing.blocked_dates}
+              monthsToShow={1}
+              onChange={(a, b) => {
+                setCheckIn(a);
+                setCheckOut(b);
+                if (a && b) setDatesOpen(false);
+              }}
+            />
+          </div>
+        )}
+        {guestsOpen && (
+          <div className="absolute left-0 top-full z-20 mt-2 w-[300px] rounded-2xl border border-neutral-200 bg-white p-4 shadow-popover dark:border-neutral-700 dark:bg-neutral-900">
+            <GuestSelector guests={guests} onChange={setGuests} max={listing.max_guests} />
+            <p className="mt-2 text-xs text-hof dark:text-neutral-400">This place has a maximum of {listing.max_guests} guests.</p>
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={handleReserve}
+        className="mt-4 w-full rounded-xl bg-gradient-to-r from-[#E61E4D] via-[#E31C5F] to-[#D70466] py-3.5 font-semibold text-white transition-opacity hover:opacity-90"
+      >
+        {canReserve ? t("Reserve") : t("Check availability")}
+      </button>
+      {canReserve && <p className="mt-3 text-center text-sm text-hof dark:text-neutral-400">{t("You won't be charged yet")}</p>}
+      {quote && !quote.available && (
+        <p className="mt-3 text-center text-sm text-rausch">{t(quote.unavailable_reason)}</p>
+      )}
+
+      {quote && (
+        <div className="mt-6 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+          <PriceBreakdown quote={quote} />
+        </div>
+      )}
+    </div>
+  );
+}

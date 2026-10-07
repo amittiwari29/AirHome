@@ -1,0 +1,48 @@
+import os
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+# Imported for its side effect: defining the models registers every table on
+# Base.metadata, which create_all() below reads. Removing it creates an empty DB.
+from . import models  # noqa: F401
+from .database import engine, Base
+from .migrate import ensure_columns
+from .routers import auth, listings, bookings, reviews, wishlist, amenities, host, experiences, destinations, users
+
+Base.metadata.create_all(bind=engine)
+# The seeded database predates the hosting columns; add whatever is missing.
+ensure_columns(engine)
+
+app = FastAPI(title="Airbnb Clone API", version="1.0.0")
+
+allowed_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth.router, prefix="/api")
+app.include_router(amenities.router, prefix="/api")
+app.include_router(listings.router, prefix="/api")
+app.include_router(bookings.router, prefix="/api")
+app.include_router(reviews.router, prefix="/api")
+app.include_router(wishlist.router, prefix="/api")
+app.include_router(host.router, prefix="/api")
+app.include_router(experiences.router, prefix="/api")
+app.include_router(destinations.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
+
+
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "airbnb-clone-api"}
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
